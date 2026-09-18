@@ -4,6 +4,28 @@
 
 Программа ищет патенты по номерам в открытых реестрах ФИПС и сохраняет отрендеренные карточки документов в PDF. PDF создаётся через Microsoft Edge/Chrome так же, как печать страницы через `Ctrl+P`.
 
+## Установка на Windows 10
+
+1. Установите Python 3.11 или 3.12 с официального сайта: https://www.python.org/downloads/windows/
+2. В установщике включите пункт `Add Python.exe to PATH`.
+3. Откройте PowerShell и выполните:
+
+```powershell
+cd C:\parser\fips-pdf-parser
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+Если PowerShell запрещает активацию окружения, выполните один раз:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+Для сохранения PDF нужен установленный Microsoft Edge или Google Chrome.
+
 ## Запуск
 
 ```powershell
