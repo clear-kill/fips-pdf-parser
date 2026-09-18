@@ -12,10 +12,12 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from tkinter import END, BOTH, LEFT, RIGHT, TOP, X, Y, Button, Entry, Frame, Label, Listbox, StringVar, Tk, filedialog, messagebox
 from tkinter import ttk
+from typing import Callable
 from urllib.parse import urljoin
 
 import requests
@@ -26,6 +28,8 @@ BASE_URL = "https://new.fips.ru"
 REGISTER_URL = f"{BASE_URL}/registers-web/"
 SEARCH_URL = f"{BASE_URL}/registers-doc-view/fips_servlet"
 USER_AGENT = "fips-patent-parser/1.0"
+SEARCH_INTERVAL = 2.0
+RESOURCE_INTERVAL = 0.2
 
 REGISTRIES = {
 	"Изобретения": "RUPAT",
@@ -52,12 +56,30 @@ class FipsClient:
 	def __init__(self) -> None:
 		self.session = requests.Session()
 		self.session.headers.update({"User-Agent": USER_AGENT})
+		self._request_lock = threading.Lock()
+		self._last_request = 0.0
+
+	def request(self, method: str, url: str, interval: float = RESOURCE_INTERVAL, **kwargs: object) -> requests.Response:
+		with self._request_lock:
+			wait = interval - (time.monotonic() - self._last_request)
+			if wait > 0:
+				time.sleep(wait)
+			response = self.session.request(method, url, **kwargs)
+			self._last_request = time.monotonic()
+		if response.status_code in {403, 429, 503}:
+			retry_after = response.headers.get("Retry-After")
+			detail = f" Повторить через {retry_after} сек." if retry_after else ""
+			raise FipsError(f"ФИПС временно ограничил запросы (HTTP {response.status_code}).{detail}")
+		response.raise_for_status()
+		return response
 
 	def get_record(self, number: str, registry_name: str) -> PatentRecord:
 		registry_code = REGISTRIES[registry_name]
-		self.session.get(REGISTER_URL, timeout=30).raise_for_status()
-		response = self.session.post(
+		self.request("GET", REGISTER_URL, timeout=30)
+		response = self.request(
+			"POST",
 			SEARCH_URL,
+			interval=SEARCH_INTERVAL,
 			data={
 				"DB": registry_code,
 				"DocNumber": number,
@@ -74,7 +96,7 @@ class FipsClient:
 		title = soup.title.get_text(" ", strip=True) if soup.title else f"Документ № {number}"
 		if not text or self._is_not_found(text):
 			raise FipsError(f"Документ № {number} не найден в реестре «{registry_name}».")
-		html = inline_images(response.text, response.url, self.session)
+		html = inline_images(response.text, response.url, self.request)
 		return PatentRecord(number, registry_name, title, text, html)
 
 	@staticmethod
@@ -87,14 +109,14 @@ def safe_filename(value: str) -> str:
 	return re.sub(r"[^\w.-]+", "_", value, flags=re.UNICODE).strip("._") or "document"
 
 
-def inline_images(html: str, page_url: str, session: requests.Session) -> str:
+def inline_images(html: str, page_url: str, request: Callable[..., requests.Response]) -> str:
 	soup = BeautifulSoup(html, "html.parser")
 	for image in soup.find_all("img", src=True):
 		source = image.get("src", "")
 		if source.startswith("data:"):
 			continue
 		try:
-			response = session.get(urljoin(page_url, source), timeout=30)
+			response = request("GET", urljoin(page_url, source), timeout=30)
 			response.raise_for_status()
 			mime_type = response.headers.get("content-type") or mimetypes.guess_type(source)[0] or "image/jpeg"
 			encoded = base64.b64encode(response.content).decode("ascii")
