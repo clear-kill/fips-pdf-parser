@@ -1,0 +1,4 @@
+patents/
+__pycache__/
+*.py[cod]
+.venv/
